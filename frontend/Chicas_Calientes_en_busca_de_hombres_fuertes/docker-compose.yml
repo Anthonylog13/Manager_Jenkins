@@ -1,0 +1,8 @@
+services:
+  frontend:
+    container_name: frontend-alfabyte
+    image: image-frontend-alfabyte:latest
+    restart: always
+    build: .
+    ports:
+      - "8080:80"
