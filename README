@@ -1,0 +1,36 @@
+# Electiva 3 - Jenkins
+
+Este proyecto contiene los archivos y configuraciones necesarios para trabajar con Jenkins en la materia Electiva 3.
+
+## Contenido
+
+- **Configuraciones de Jenkins**: Archivos relacionados con la configuración y automatización de tareas.
+- **Scripts**: Scripts utilizados para la integración y despliegue continuo.
+- **Documentación**: Información relevante sobre el uso y configuración del proyecto.
+
+## Requisitos
+
+- Jenkins instalado en el sistema.
+- Conexión a internet para descargar dependencias.
+- Herramientas adicionales según las necesidades del proyecto.
+
+## Instalación
+
+1. Clona este repositorio en tu máquina local:
+   ```
+   git clone <URL_DEL_REPOSITORIO>
+   ```
+2. Configura Jenkins según las instrucciones proporcionadas en la documentación.
+3. Ejecuta los scripts necesarios para iniciar el proyecto.
+
+## Uso
+
+Sigue las instrucciones en la documentación para configurar y ejecutar las tareas automatizadas en Jenkins.
+
+## Contribución
+
+Si deseas contribuir a este proyecto, por favor realiza un fork del repositorio, realiza tus cambios y envía un pull request.
+
+## Licencia
+
+Este proyecto está bajo la licencia [MIT](LICENSE).
