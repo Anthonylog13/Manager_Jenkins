@@ -1,0 +1,64 @@
+pipeline {
+    agent any
+
+    environment {
+        BACKEND_DIR = "AlfaByte_Xclone-"
+        FRONTEND_DIR = "Frontend"
+    }
+
+    stages {
+        stage('Clonar repositorio') {
+            steps {
+                echo " Clonando repositorio..."
+                checkout scm
+            }
+        }
+
+        stage('Construir Backend') {
+            steps {
+                echo "Construyendo backend..."
+                dir("${BACKEND_DIR}") {
+                    sh 'docker-compose build backend'
+                }
+            }
+        }
+
+        stage('Ejecutar Pruebas Backend') {
+            steps {
+                echo "Ejecutando pruebas del backend..."
+                dir("${BACKEND_DIR}") {
+                    sh 'docker-compose run --rm backend npm test'
+                }
+            }
+        }
+
+        stage('Construir Frontend') {
+            steps {
+                echo " Construyendo frontend..."
+                dir("${FRONTEND_DIR}") {
+                    sh 'docker-compose build frontend'
+                }
+            }
+        }
+
+        stage('Desplegar Aplicación') {
+            steps {
+                echo " Desplegando aplicación..."
+                sh 'docker-compose -f AlfaByte_Xclone-/docker-compose.yml down || true'
+                sh 'docker-compose -f Frontend/docker-compose.yml down || true'
+
+                sh 'docker-compose -f AlfaByte_Xclone-/docker-compose.yml up -d'
+                sh 'docker-compose -f Frontend/docker-compose.yml up -d'
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo " Falló el pipeline"
+        }
+        success {
+            echo " Despliegue exitoso"
+        }
+    }
+}
