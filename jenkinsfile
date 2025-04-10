@@ -28,7 +28,7 @@ pipeline {
                 echo "==> Ejecutando pruebas del backend..."
                 dir(BACKEND_DIR) {
                     bat 'docker-compose up -d mongobackend'
-                    bat 'docker-compose run --rm backend npm test'
+                    bat 'docker-compose run --rm backend npm run tests'
                     bat 'docker-compose stop mongobackend'
                 }
             }
