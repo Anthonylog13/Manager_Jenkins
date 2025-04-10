@@ -7,58 +7,59 @@ pipeline {
     }
 
     stages {
-        stage('Clonar repositorio') {
+        stage('Clonar Repositorio') {
             steps {
-                echo " Clonando repositorio..."
+                echo "==> Clonando repositorio..."
                 checkout scm
             }
         }
 
         stage('Construir Backend') {
             steps {
-                echo "Construyendo backend..."
-                dir("${BACKEND_DIR}") {
-                    sh 'docker-compose build backend'
+                echo "==> Construyendo imagen de backend..."
+                dir(BACKEND_DIR) {
+                    bat 'docker-compose build backend'
                 }
             }
         }
 
-        stage('Ejecutar Pruebas Backend') {
+        stage('Test Backend') {
             steps {
-                echo "Ejecutando pruebas del backend..."
-                dir("${BACKEND_DIR}") {
-                    sh 'docker-compose run --rm backend npm test'
+                echo "==> Ejecutando pruebas del backend..."
+                dir(BACKEND_DIR) {
+                    bat 'docker-compose up -d mongobackend'
+                    bat 'docker-compose run --rm backend npm test'
+                    bat 'docker-compose stop mongobackend'
                 }
             }
         }
 
         stage('Construir Frontend') {
             steps {
-                echo " Construyendo frontend..."
-                dir("${FRONTEND_DIR}") {
-                    sh 'docker-compose build frontend'
+                echo "==> Construyendo imagen de frontend..."
+                dir(FRONTEND_DIR) {
+                    bat 'docker-compose build frontend'
                 }
             }
         }
 
         stage('Desplegar Aplicación') {
             steps {
-                echo " Desplegando aplicación..."
-                sh 'docker-compose -f AlfaByte_Xclone-/docker-compose.yml down || true'
-                sh 'docker-compose -f Frontend/docker-compose.yml down || true'
-
-                sh 'docker-compose -f AlfaByte_Xclone-/docker-compose.yml up -d'
-                sh 'docker-compose -f Frontend/docker-compose.yml up -d'
+                echo "==> Desplegando aplicación..."
+                bat 'docker-compose -f AlfaByte_Xclone-/docker-compose.yml down || exit 0'
+                bat 'docker-compose -f Frontend/docker-compose.yml down || exit 0'
+                bat 'docker-compose -f AlfaByte_Xclone-/docker-compose.yml up -d'
+                bat 'docker-compose -f Frontend/docker-compose.yml up -d'
             }
         }
     }
 
     post {
-        failure {
-            echo " Falló el pipeline"
-        }
         success {
-            echo " Despliegue exitoso"
+            echo "Despliegue exitoso"
+        }
+        failure {
+            echo "Falló el pipeline"
         }
     }
 }
