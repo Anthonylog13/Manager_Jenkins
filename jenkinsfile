@@ -12,7 +12,7 @@ pipeline {
         EC2_IP             = '3.15.177.89'       // ¡LA IP PÚBLICA DE TU EC2!
         // --- IDs de Credenciales Jenkins ---
         AWS_CREDS_ID       = 'aws-manageJenkins' 
-        SSH_KEY_ID         = 'xclone-key-ssh' 
+        SSH_KEY_ID         = 'xclone-key-ssh'    // Asegúrate que la clave OpenSSH está aquí
         JWT_SECRET_ID      = 'jwt-secret-id' 
         MONGO_PW_ID        = 'mongo-pw-id' 
     }
@@ -25,53 +25,30 @@ pipeline {
             }
         }
 
-      stage('Login ECR Público') {
+        stage('Login ECR Público') {
             steps {
                 echo "==> Haciendo login en ECR Público usando PowerShell..."
                 withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
                     script {
+                        // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO EN WINDOWS!
                         def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe' 
-                        def tempTokenFile = "ecr_token.tmp" // Cambié el nombre un poco
-
+                        
                         def psLoginScript = """
-                            Write-Output "Paso 1: Obteniendo token de ECR..."
-                            \$rawTokenOutput = & \"${awsCliFullPath}\" ecr-public get-login-password --region \"${ECR_PUBLIC_REGION}\"
-                            \$ecrPassword = \$rawTokenOutput.Trim()
-
-                            if (!\$ecrPassword -or \$ecrPassword.Length -lt 100) {
-                                Write-Error "No se obtuvo un token válido de AWS ECR. Salida: '\$rawTokenOutput'"
-                                exit 1 
-                            }
-                            \$tokenStart = \$ecrPassword.Substring(0, [System.Math]::Min(20, \$ecrPassword.Length))
-                            \$tokenEnd = \$ecrPassword.Substring([System.Math]::Max(0, \$ecrPassword.Length - 20))
-                            Write-Output "Token ECR obtenido (longitud: \$(\$ecrPassword.Length)). Inicio: '\$tokenStart...' Fin: '...\$tokenEnd'"
-                            
-                            Write-Output "Paso 2: Escribiendo token a archivo temporal..."
-                            # Intentamos sin especificar codificación, PowerShell Core suele usar UTF-8 sin BOM por defecto para Set-Content
-                            # Si esto falla, la siguiente opción es -Encoding Ascii o -Encoding String
-                            Set-Content -Path "${tempTokenFile}" -Value \$ecrPassword -NoNewline
-
-                            Write-Output "Paso 3: Intentando hacer login en Docker ECR Público usando el archivo..."
-                            Get-Content -Path "${tempTokenFile}" -Raw | docker login --username AWS --password-stdin "public.ecr.aws" 
-                            
-                            if (\$LASTEXITCODE -ne 0) {
-                                Write-Error "Docker login a ECR Público falló con código de salida: \$LASTEXITCODE"
-                                docker info 
-                                Remove-Item "${tempTokenFile}" -ErrorAction SilentlyContinue 
+                            Write-Output "Obteniendo token de ECR..."
+                            \$token = (& \"${awsCliFullPath}\" ecr-public get-login-password --region \"${ECR_PUBLIC_REGION}\").Trim()
+                            if (!\$token -or \$token.Length -lt 100) {
+                                Write-Error "No se obtuvo un token válido de AWS ECR."
                                 exit 1
                             }
-                            Write-Output "Login a ECR Público aparentemente completado."
-                            Remove-Item "${tempTokenFile}" -ErrorAction SilentlyContinue 
+                            Write-Output "Token obtenido. Intentando login en Docker..."
+                            \$token | docker login --username AWS --password-stdin "public.ecr.aws"                            
+                            if (\$LASTEXITCODE -ne 0) {
+                                Write-Error "Docker login a ECR Público falló. Código: \$LASTEXITCODE"
+                                exit 1
+                            }
+                            Write-Output "Login a ECR Público exitoso."
                         """
-                        
-                        try {
-                            powershell(script: psLoginScript)
-                            echo "Stage de Login ECR Público completado con éxito." 
-                        } catch (e) {
-                            echo "EXCEPCIÓN al ejecutar PowerShell para login ECR: ${e.getMessage()}"
-                            powershell "if (Test-Path '${tempTokenFile}') { Remove-Item '${tempTokenFile}' -ErrorAction SilentlyContinue }"
-                            throw e
-                        }
+                        powershell(script: psLoginScript)
                     }
                 }
             }
@@ -107,12 +84,16 @@ pipeline {
             steps {
                 echo "==> Desplegando en EC2..."
                 withCredentials([
-                    sshUserPrivateKey(credentialsId: SSH_KEY_ID, keyFileVariable: 'SSH_KEY_FILE'),
+                    sshUserPrivateKey(credentialsId: SSH_KEY_ID, keyFileVariable: 'SSH_KEY_FILE_PATH'), // Jenkins crea un archivo temporal
                     string(credentialsId: JWT_SECRET_ID, variable: 'JWT_SECRET_VALUE'),
                     string(credentialsId: MONGO_PW_ID, variable: 'MONGO_PASSWORD_VALUE')
                 ]) {
+                    // Para Windows, el path a la llave SSH que Jenkins crea
+                    // puede necesitar ajuste o uso del plugin SSH Agent.
+                    // Este 'bat' es una aproximación y puede necesitar ajustes para Windows.
+                    // La variable %SSH_KEY_FILE_PATH% contendrá la ruta al archivo de la llave.
                     bat """
-                        ssh -o StrictHostKeyChecking=no -i %SSH_KEY_FILE% ec2-user@${EC2_IP} ^
+                        ssh -o StrictHostKeyChecking=no -i "%SSH_KEY_FILE_PATH%" ec2-user@${EC2_IP} ^
                         "echo '==> Conectado a EC2. Preparando despliegue...'; ^
                         export BACKEND_IMAGE_URL='${env.BACKEND_IMAGE_URL}'; ^
                         export FRONTEND_IMAGE_URL='${env.FRONTEND_IMAGE_URL}'; ^
@@ -123,14 +104,14 @@ pipeline {
                         export MONGO_ATLAS_DB_PASSWORD='${MONGO_PASSWORD_VALUE}'; ^
                         export JWT_SECRET='${JWT_SECRET_VALUE}'; ^
                         
-                        echo '==> Haciendo login en ECR Público...'; ^
+                        echo '==> Haciendo login en ECR Público en EC2...'; ^
                         aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION} | docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}; ^
 
-                        echo '==> Descargando imágenes...'; ^
+                        echo '==> Descargando imágenes en EC2...'; ^
                         docker pull \$BACKEND_IMAGE_URL; ^
                         docker pull \$FRONTEND_IMAGE_URL; ^
                         
-                        echo '==> Ejecutando docker-compose...'; ^
+                        echo '==> Ejecutando docker-compose en EC2...'; ^
                         mkdir -p /home/ec2-user/app; ^
                         cd /home/ec2-user/app; ^
                         # ¡CAMBIA ESTO POR LA URL DE TU REPOSITORIO REAL!
@@ -138,7 +119,7 @@ pipeline {
                         
                         docker-compose -f docker-compose.prod.yml up -d --remove-orphans; ^
 
-                        echo '==> Limpiando imágenes antiguas (opcional)...'; ^
+                        echo '==> Limpiando imágenes antiguas en EC2 (opcional)...'; ^
                         docker image prune -f; ^
 
                         echo '==> ¡Despliegue completado! ✅';"
