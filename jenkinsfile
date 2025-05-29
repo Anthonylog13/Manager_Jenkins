@@ -25,48 +25,43 @@ pipeline {
             }
         }
 
-        stage('Login ECR Público') {
+      stage('Login ECR Público') {
             steps {
                 echo "==> Haciendo login en ECR Público usando PowerShell..."
                 withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
                     script {
-                        // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO EN WINDOWS!
                         def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe' 
-                        def tempTokenFile = "ecr_token_utf8.tmp" // Archivo temporal para el token
-                        
+                        def tempTokenFile = "ecr_token.tmp" // Cambié el nombre un poco
+
                         def psLoginScript = """
                             Write-Output "Paso 1: Obteniendo token de ECR..."
-                            # Ejecuta el comando y captura la salida cruda
                             \$rawTokenOutput = & \"${awsCliFullPath}\" ecr-public get-login-password --region \"${ECR_PUBLIC_REGION}\"
-                            
-                            # Limpia el token: quita espacios/saltos de línea al principio/final
                             \$ecrPassword = \$rawTokenOutput.Trim()
 
-                            if (!\$ecrPassword -or \$ecrPassword.Length -lt 100) { // Un token válido es mucho más largo que 100
+                            if (!\$ecrPassword -or \$ecrPassword.Length -lt 100) {
                                 Write-Error "No se obtuvo un token válido de AWS ECR. Salida: '\$rawTokenOutput'"
                                 exit 1 
                             }
-                            # Imprimimos solo una parte para inspección
                             \$tokenStart = \$ecrPassword.Substring(0, [System.Math]::Min(20, \$ecrPassword.Length))
                             \$tokenEnd = \$ecrPassword.Substring([System.Math]::Max(0, \$ecrPassword.Length - 20))
                             Write-Output "Token ECR obtenido (longitud: \$(\$ecrPassword.Length)). Inicio: '\$tokenStart...' Fin: '...\$tokenEnd'"
                             
-                            Write-Output "Paso 2: Escribiendo token a archivo temporal con codificación UTF-8 sin BOM..."
-                            # Escribimos el token al archivo explícitamente como UTF-8 sin BOM
-                            Set-Content -Path "${tempTokenFile}" -Value \$ecrPassword -Encoding UTF8NoBOM -NoNewline
+                            Write-Output "Paso 2: Escribiendo token a archivo temporal..."
+                            # Intentamos sin especificar codificación, PowerShell Core suele usar UTF-8 sin BOM por defecto para Set-Content
+                            # Si esto falla, la siguiente opción es -Encoding Ascii o -Encoding String
+                            Set-Content -Path "${tempTokenFile}" -Value \$ecrPassword -NoNewline
 
                             Write-Output "Paso 3: Intentando hacer login en Docker ECR Público usando el archivo..."
-                            # Leemos el contenido crudo del archivo y lo pasamos por la tubería
                             Get-Content -Path "${tempTokenFile}" -Raw | docker login --username AWS --password-stdin "public.ecr.aws" 
                             
                             if (\$LASTEXITCODE -ne 0) {
                                 Write-Error "Docker login a ECR Público falló con código de salida: \$LASTEXITCODE"
-                                docker info # Intentamos obtener más info de Docker
-                                Remove-Item "${tempTokenFile}" -ErrorAction SilentlyContinue # Limpia incluso en error
+                                docker info 
+                                Remove-Item "${tempTokenFile}" -ErrorAction SilentlyContinue 
                                 exit 1
                             }
                             Write-Output "Login a ECR Público aparentemente completado."
-                            Remove-Item "${tempTokenFile}" -ErrorAction SilentlyContinue # Limpia en éxito
+                            Remove-Item "${tempTokenFile}" -ErrorAction SilentlyContinue 
                         """
                         
                         try {
@@ -74,8 +69,7 @@ pipeline {
                             echo "Stage de Login ECR Público completado con éxito." 
                         } catch (e) {
                             echo "EXCEPCIÓN al ejecutar PowerShell para login ECR: ${e.getMessage()}"
-                            // Si hay un archivo temporal sobrante, intentamos borrarlo
-                            powershell "Remove-Item '${tempTokenFile}' -ErrorAction SilentlyContinue"
+                            powershell "if (Test-Path '${tempTokenFile}') { Remove-Item '${tempTokenFile}' -ErrorAction SilentlyContinue }"
                             throw e
                         }
                     }
