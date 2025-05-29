@@ -16,18 +16,11 @@ pipeline {
         }
 
         stage('Test AWS CLI Execution') {
-    steps {
-        echo "==> Variables de Entorno en Jenkins =="
-        bat "set" // Esto imprimirá todas las variables de entorno
-
-        echo "==> Intentando ejecutar AWS CLI directamente..."
-        // ... el resto del stage ...
-    }
-}
-
-        stage('Test AWS CLI Execution') {
             steps {
+                echo "==> Variables de Entorno en Jenkins =="
+                bat "set"
                 echo "==> Intentando ejecutar AWS CLI directamente..."
+                
                 script {
                     // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO EN WINDOWS!
                     def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe'
