@@ -1,16 +1,17 @@
 pipeline {
-    agent any 
+    agent any // O tu agente Windows
 
     environment {
         AWS_REGION         = 'us-east-2'
         ECR_PUBLIC_REGION  = 'us-east-1' 
-        ECR_PUBLIC_ALIAS   = 'e5f4p9e5'
+        ECR_PUBLIC_ALIAS   = 'e5f4p9e5'          // ¡CAMBIA ESTO POR TU ALIAS REAL!
         BACKEND_DIR        = "AlfaByte_Xclone-"
         FRONTEND_DIR       = "Frontend"
         BACKEND_REPO_NAME  = 'alfabyte-xclone-backend'
         FRONTEND_REPO_NAME = 'alfabyte-xclone-frontend'
-        EC2_IP             = '3.15.177.89' 
-        AWS_CREDS_ID       = 'aws-manageJenkins'
+        EC2_IP             = '3.15.177.89'       // ¡LA IP PÚBLICA DE TU EC2!
+        // --- IDs de Credenciales Jenkins ---
+        AWS_CREDS_ID       = 'aws-manageJenkins' // Ya confirmaste que este es tu ID
         SSH_KEY_ID         = 'xclone-key-ssh' 
         JWT_SECRET_ID      = 'jwt-secret-id' 
         MONGO_PW_ID        = 'mongo-pw-id' 
@@ -25,53 +26,55 @@ pipeline {
         }
 
         stage('Login ECR Público') {
-        steps {
-            echo "==> Haciendo login en ECR Público..."
-            withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
-                script {
-                    def tempPasswordFile = "ecrpass.tmp"
-                    // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO!
-                    def awsCliPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe' 
-                    // Comando para obtener el token. Las comillas alrededor de awsCliPath son cruciales.
-                    def getEcrTokenCmd = "\"${awsCliPath}\" ecr-public get-login-password --region ${ECR_PUBLIC_REGION}"
-                    // Comando para el login de Docker
-                    def dockerLoginFullCmd = "docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}"
-
-                    try {
-                        echo "Paso 1: Ejecutando comando para obtener token de ECR: ${getEcrTokenCmd}"
-                        // Ejecutamos el comando AWS y guardamos la salida en una variable de Groovy
-                        def passwordOutput = bat(script: getEcrTokenCmd, returnStdout: true).trim()
-
-                        if (passwordOutput && !passwordOutput.isEmpty()) {
-                            echo "Token ECR obtenido (longitud: ${passwordOutput.length()})."
-                            // NO imprimas el token por seguridad, solo su longitud
-                        } else {
-                            error("No se obtuvo token de AWS ECR o la salida está vacía.")
-                        }
-
-                        echo "Paso 2: Intentando hacer login en Docker..."
-                        // Escribimos el token a un archivo temporal
-                        writeFile file: tempPasswordFile, text: passwordOutput
+            steps {
+                echo "==> Haciendo login en ECR Público..."
+                withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
+                    script {
+                        def tempPasswordFile = "ecrpass.tmp"
+                        // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO!
+                        def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe' 
                         
-                        // Usamos 'type' para pasar el contenido del archivo como stdin a docker login
-                        bat(script: "type ${tempPasswordFile} | ${dockerLoginFullCmd}")
+                        // Comando para obtener el token.
+                        def getEcrTokenFullCommand = "\"${awsCliFullPath}\" ecr-public get-login-password --region ${ECR_PUBLIC_REGION}"
                         
-                        echo "Login de Docker completado."
+                        // Comando para el login de Docker
+                        def dockerLoginFullCommand = "docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}"
 
-                    } catch (e) {
-                        echo "Error durante el login a ECR: ${e.getMessage()}"
-                        if (e.getStackTrace()) {
-                            e.getStackTrace().each { line -> echo line.toString() }
+                        try {
+                            echo "Paso 1: Ejecutando comando para obtener token de ECR: ${getEcrTokenFullCommand}"
+                            def passwordOutput = bat(script: getEcrTokenFullCommand, returnStdout: true).trim()
+
+                            if (passwordOutput && !passwordOutput.isEmpty()) {
+                                echo "Token ECR obtenido (longitud: ${passwordOutput.length()})."
+                            } else {
+                                // Si passwordOutput está vacío, puede que el comando aws haya fallado silenciosamente
+                                // o no haya producido salida. Intentamos obtener el código de salida.
+                                echo "Salida de token vacía. Verificando código de salida del comando AWS..."
+                                def awsCmdExitCode = bat(script: getEcrTokenFullCommand, returnStatus: true)
+                                error("No se obtuvo token de AWS ECR o la salida está vacía. Código de salida del comando AWS: ${awsCmdExitCode}")
+                            }
+
+                            echo "Paso 2: Intentando hacer login en Docker..."
+                            writeFile file: tempPasswordFile, text: passwordOutput
+                            
+                            bat(script: "type ${tempPasswordFile} | ${dockerLoginFullCommand}")
+                            
+                            echo "Login de Docker completado."
+
+                        } catch (e) {
+                            echo "Error durante el login a ECR: ${e.getMessage()}"
+                            if (e.getStackTrace()) {
+                                e.getStackTrace().each { line -> echo line.toString() }
+                            }
+                            throw e 
+                        } finally {
+                            echo "Paso 3: Limpiando archivo temporal..."
+                            bat(script: "del ${tempPasswordFile}", failOnError: false) 
                         }
-                        throw e 
-                    } finally {
-                        echo "Paso 3: Limpiando archivo temporal..."
-                        bat(script: "del ${tempPasswordFile}", failOnError: false) 
                     }
                 }
             }
         }
-    }
 
         stage('Build & Push Backend') {
             steps {
@@ -107,8 +110,6 @@ pipeline {
                     string(credentialsId: JWT_SECRET_ID, variable: 'JWT_SECRET_VALUE'),
                     string(credentialsId: MONGO_PW_ID, variable: 'MONGO_PASSWORD_VALUE')
                 ]) {
-                    // ¡OJO con 'bat'! Asegúrate que 'ssh.exe' está en el PATH de Jenkins.
-                    // Usamos comillas dobles al final para el comando SSH y ^ para saltos de línea.
                     bat """
                         ssh -o StrictHostKeyChecking=no -i %SSH_KEY_FILE% ec2-user@${EC2_IP} ^
                         "echo '==> Conectado a EC2. Preparando despliegue...'; ^
@@ -122,22 +123,20 @@ pipeline {
                         export JWT_SECRET='${JWT_SECRET_VALUE}'; ^
                         
                         echo '==> Haciendo login en ECR Público...'; ^
-                        aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION} | docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}; ^
+                        # Usamos la ruta completa de AWS CLI en EC2 también por si acaso (aunque el user_data ya debería instalarlo globalmente)
+                        # Si está en el PATH en EC2, solo 'aws' es suficiente.
+                        /usr/local/bin/aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION} | docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}; ^
 
                         echo '==> Descargando imágenes...'; ^
                         docker pull \$BACKEND_IMAGE_URL; ^
                         docker pull \$FRONTEND_IMAGE_URL; ^
                         
                         echo '==> Ejecutando docker-compose...'; ^
-                        # Hacemos git pull para obtener el docker-compose.prod.yml (o lo copiamos con scp)
-                        # Creamos la carpeta si no existe
                         mkdir -p /home/ec2-user/app; ^
                         cd /home/ec2-user/app; ^
-                        # Asumiendo que tu repo es público, si es privado necesitas credenciales
-                        git pull https://github.com/TU_USUARIO/TU_REPO.git; ^ 
-                        # O si es privado: git pull git@github.com:TU_USUARIO/TU_REPO.git (necesita llave SSH)
+                        # ¡CAMBIA ESTO POR LA URL DE TU REPOSITORIO REAL!
+                        git pull https://github.com/Anthonylog13/Manager_Jenkins.git; ^ 
                         
-                        # Ejecutamos el compose unificado
                         docker-compose -f docker-compose.prod.yml up -d --remove-orphans; ^
 
                         echo '==> Limpiando imágenes antiguas (opcional)...'; ^
