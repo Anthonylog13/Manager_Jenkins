@@ -48,15 +48,11 @@ pipeline {
                             Write-Output "Token ECR obtenido (longitud: \$(\$ecrPassword.Length))."
                             
                             Write-Output "Paso 2: Intentando hacer login en Docker..."
-                            # Establecemos la contraseña como una variable de entorno temporal
-                            \$env:DOCKER_PASSWORD = \$ecrPassword
+                            # Intentamos pasar el token directamente a través de la tubería
+                            # y nos aseguramos de que no haya otra salida antes.
+                            # El token se envía al stdin de docker login.
+                            \$ecrPassword | docker login --username AWS --password-stdin "public.ecr.aws/${ECR_PUBLIC_ALIAS}"
                             
-                            # Intentamos el login
-                            docker login --username AWS --password-stdin "public.ecr.aws/${ECR_PUBLIC_ALIAS}"
-                            
-                            # Limpiamos la variable de entorno
-                            Remove-Item Env:DOCKER_PASSWORD
-
                             if (\$LASTEXITCODE -ne 0) {
                                 Write-Error "Docker login falló con código de salida: \$LASTEXITCODE"
                                 exit 1
@@ -66,7 +62,7 @@ pipeline {
                         
                         try {
                             powershell(script: psLoginScript)
-                            echo "Stage de Login ECR Público completado con éxito."
+                            echo "Stage de Login ECR Público completado con éxito." 
                         } catch (e) {
                             echo "EXCEPCIÓN al ejecutar PowerShell para login ECR: ${e.getMessage()}"
                             throw e
@@ -82,8 +78,9 @@ pipeline {
                 script {
                     env.BACKEND_IMAGE_URL = "public.ecr.aws/${ECR_PUBLIC_ALIAS}/${BACKEND_REPO_NAME}:${env.BUILD_NUMBER}"
                     dir(BACKEND_DIR) {
-                        bat "docker build -t ${env.BACKEND_IMAGE_URL} ."
-                        bat "docker push ${env.BACKEND_IMAGE_URL}"
+                        // Cambiamos a powershell si bat sigue dando problemas
+                        powershell "docker build -t '${env.BACKEND_IMAGE_URL}' ."
+                        powershell "docker push '${env.BACKEND_IMAGE_URL}'"
                     }
                 }
             }
@@ -95,8 +92,9 @@ pipeline {
                  script {
                     env.FRONTEND_IMAGE_URL = "public.ecr.aws/${ECR_PUBLIC_ALIAS}/${FRONTEND_REPO_NAME}:${env.BUILD_NUMBER}"
                     dir(FRONTEND_DIR) {
-                        bat "docker build -t ${env.FRONTEND_IMAGE_URL} ."
-                        bat "docker push ${env.FRONTEND_IMAGE_URL}"
+                        // Cambiamos a powershell si bat sigue dando problemas
+                        powershell "docker build -t '${env.FRONTEND_IMAGE_URL}' ."
+                        powershell "docker push '${env.FRONTEND_IMAGE_URL}'"
                     }
                 }
             }
@@ -110,6 +108,9 @@ pipeline {
                     string(credentialsId: JWT_SECRET_ID, variable: 'JWT_SECRET_VALUE'),
                     string(credentialsId: MONGO_PW_ID, variable: 'MONGO_PASSWORD_VALUE')
                 ]) {
+                    // El comando SSH multilínea con 'bat' es propenso a errores en Windows.
+                    // Si este stage falla, sería mejor convertirlo a un script PowerShell
+                    // o usar el plugin "SSH Agent" o "Publish over SSH".
                     bat """
                         ssh -o StrictHostKeyChecking=no -i %SSH_KEY_FILE% ec2-user@${EC2_IP} ^
                         "echo '==> Conectado a EC2. Preparando despliegue...'; ^
