@@ -1,9 +1,19 @@
 pipeline {
-    agent any
+    agent any 
 
     environment {
-        BACKEND_DIR = "AlfaByte_Xclone-"
-        FRONTEND_DIR = "Frontend"
+        AWS_REGION         = 'us-east-2'
+        ECR_PUBLIC_REGION  = 'us-east-1' 
+        ECR_PUBLIC_ALIAS   = 'e5f4p9e5'
+        BACKEND_DIR        = "AlfaByte_Xclone-"
+        FRONTEND_DIR       = "Frontend"
+        BACKEND_REPO_NAME  = 'alfabyte-xclone-backend'
+        FRONTEND_REPO_NAME = 'alfabyte-xclone-frontend'
+        EC2_IP             = '3.15.177.89' 
+        AWS_CREDS_ID       = 'aws-manageJenkins'
+        SSH_KEY_ID         = 'xclone-key-ssh' 
+        JWT_SECRET_ID      = 'jwt-secret-id' 
+        MONGO_PW_ID        = 'mongo-pw-id' 
     }
 
     stages {
@@ -14,52 +24,98 @@ pipeline {
             }
         }
 
-        stage('Construir Backend') {
+        stage('Login ECR Público') {
             steps {
-                echo "==> Construyendo imagen de backend..."
-                dir(BACKEND_DIR) {
-                    bat 'docker-compose build backend'
+                echo "==> Haciendo login en ECR Público..."
+                withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
+                    bat "aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION} | docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}"
                 }
             }
         }
 
-        stage('Test Backend') {
+        stage('Build & Push Backend') {
             steps {
-                echo "==> Ejecutando pruebas del backend..."
-                dir(BACKEND_DIR) {
-                    bat 'docker-compose up -d mongobackend'
-                    //bat 'docker-compose run --rm backend npm run tests'
-                    bat 'docker-compose stop mongobackend'
+                echo "==> Construyendo y subiendo imagen de backend..."
+                script {
+                    env.BACKEND_IMAGE_URL = "public.ecr.aws/${ECR_PUBLIC_ALIAS}/${BACKEND_REPO_NAME}:${env.BUILD_NUMBER}"
+                    dir(BACKEND_DIR) {
+                        bat "docker build -t ${env.BACKEND_IMAGE_URL} ."
+                        bat "docker push ${env.BACKEND_IMAGE_URL}"
+                    }
                 }
             }
         }
 
-        stage('Construir Frontend') {
+        stage('Build & Push Frontend') {
             steps {
-                echo "==> Construyendo imagen de frontend..."
-                dir(FRONTEND_DIR) {
-                    bat 'docker-compose build frontend'
+                echo "==> Construyendo y subiendo imagen de frontend..."
+                 script {
+                    env.FRONTEND_IMAGE_URL = "public.ecr.aws/${ECR_PUBLIC_ALIAS}/${FRONTEND_REPO_NAME}:${env.BUILD_NUMBER}"
+                    dir(FRONTEND_DIR) {
+                        bat "docker build -t ${env.FRONTEND_IMAGE_URL} ."
+                        bat "docker push ${env.FRONTEND_IMAGE_URL}"
+                    }
                 }
             }
         }
 
-        stage('Desplegar Aplicación') {
+        stage('Desplegar en AWS EC2') {
             steps {
-                echo "==> Desplegando aplicación..."
-                bat 'docker-compose -f AlfaByte_Xclone-/docker-compose.yml down || exit 0'
-                bat 'docker-compose -f Frontend/docker-compose.yml down || exit 0'
-                bat 'docker-compose -f AlfaByte_Xclone-/docker-compose.yml up -d'
-                bat 'docker-compose -f Frontend/docker-compose.yml up -d'
+                echo "==> Desplegando en EC2..."
+                withCredentials([
+                    sshUserPrivateKey(credentialsId: SSH_KEY_ID, keyFileVariable: 'SSH_KEY_FILE'),
+                    string(credentialsId: JWT_SECRET_ID, variable: 'JWT_SECRET_VALUE'),
+                    string(credentialsId: MONGO_PW_ID, variable: 'MONGO_PASSWORD_VALUE')
+                ]) {
+                    // ¡OJO con 'bat'! Asegúrate que 'ssh.exe' está en el PATH de Jenkins.
+                    // Usamos comillas dobles al final para el comando SSH y ^ para saltos de línea.
+                    bat """
+                        ssh -o StrictHostKeyChecking=no -i %SSH_KEY_FILE% ec2-user@${EC2_IP} ^
+                        "echo '==> Conectado a EC2. Preparando despliegue...'; ^
+                        export BACKEND_IMAGE_URL='${env.BACKEND_IMAGE_URL}'; ^
+                        export FRONTEND_IMAGE_URL='${env.FRONTEND_IMAGE_URL}'; ^
+                        export APP_PORT='3000'; ^
+                        export MONGO_ATLAS='mongodb+srv://anthonyarango01:${MONGO_PASSWORD_VALUE}@databasesx.silq0.mongodb.net/'; ^
+                        export DB_NAME='databasesx'; ^
+                        export MONGO_ATLAS_DB_USER='anthonyarango01'; ^
+                        export MONGO_ATLAS_DB_PASSWORD='${MONGO_PASSWORD_VALUE}'; ^
+                        export JWT_SECRET='${JWT_SECRET_VALUE}'; ^
+                        
+                        echo '==> Haciendo login en ECR Público...'; ^
+                        aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION} | docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}; ^
+
+                        echo '==> Descargando imágenes...'; ^
+                        docker pull \$BACKEND_IMAGE_URL; ^
+                        docker pull \$FRONTEND_IMAGE_URL; ^
+                        
+                        echo '==> Ejecutando docker-compose...'; ^
+                        # Hacemos git pull para obtener el docker-compose.prod.yml (o lo copiamos con scp)
+                        # Creamos la carpeta si no existe
+                        mkdir -p /home/ec2-user/app; ^
+                        cd /home/ec2-user/app; ^
+                        # Asumiendo que tu repo es público, si es privado necesitas credenciales
+                        git pull https://github.com/TU_USUARIO/TU_REPO.git; ^ 
+                        # O si es privado: git pull git@github.com:TU_USUARIO/TU_REPO.git (necesita llave SSH)
+                        
+                        # Ejecutamos el compose unificado
+                        docker-compose -f docker-compose.prod.yml up -d --remove-orphans; ^
+
+                        echo '==> Limpiando imágenes antiguas (opcional)...'; ^
+                        docker image prune -f; ^
+
+                        echo '==> ¡Despliegue completado! ✅';"
+                    """
+                }
             }
         }
     }
 
     post {
         success {
-            echo "Despliegue exitoso"
+            echo "Pipeline ejecutado con éxito."
         }
         failure {
-            echo "Falló el pipeline"
+            echo "Falló el pipeline."
         }
     }
 }

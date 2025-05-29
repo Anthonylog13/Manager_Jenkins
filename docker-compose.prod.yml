@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  backend:
+    container_name: backend-alfabyte
+    restart: unless-stopped
+    image: ${BACKEND_IMAGE_URL} 
+    ports:
+      - "3000:3000"
+    environment:
+
+      - APP_PORT=${APP_PORT}
+      - MONGO_ATLAS=${MONGO_ATLAS} 
+      - DB_NAME=${DB_NAME}
+      - MONGO_ATLAS_DB_USER=${MONGO_ATLAS_DB_USER}
+      - MONGO_ATLAS_DB_PASSWORD=${MONGO_ATLAS_DB_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+
+
+
+  frontend:
+    container_name: frontend-alfabyte
+    restart: unless-stopped
+   
+    image: ${FRONTEND_IMAGE_URL} 
+    ports:
+     
+      - "80:80" 
+    
+    depends_on:
+      - backend
