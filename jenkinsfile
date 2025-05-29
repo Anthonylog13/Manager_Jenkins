@@ -1,22 +1,23 @@
 pipeline {
-    agent any // Se ejecutará en tu agente Windows
+    agent any // Tu agente Windows
 
     stages {
-        stage('Prueba BAT Súper Básica') {
+        stage('Test PowerShell Súper Básico') {
             steps {
-                echo "Paso 1: Intentando 'echo Hello'"
-                bat "echo Hello from Jenkins BAT step"
-                echo "Paso 1: Comando 'echo' supuestamente completado."
+                echo "Paso 1: Intentando 'Write-Host Hello'"
+                // Usamos triple comilla simple para evitar problemas con Groovy y $
+                powershell '''Write-Host "Hello from Jenkins PowerShell step"'''
+                echo "Paso 1: Comando 'Write-Host' supuestamente completado."
 
-                echo "Paso 2: Intentando 'dir'"
-                bat "dir"
-                echo "Paso 2: Comando 'dir' supuestamente completado."
+                echo "Paso 2: Intentando 'Get-Location'"
+                powershell "Get-Location"
+                echo "Paso 2: Comando 'Get-Location' supuestamente completado."
             }
         }
     }
     post {
         always {
-            echo "Pipeline de diagnóstico ultra-mínimo finalizado."
+            echo "Pipeline de diagnóstico PowerShell finalizado."
         }
     }
 }
