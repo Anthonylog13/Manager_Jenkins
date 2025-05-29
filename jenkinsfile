@@ -1,160 +1,87 @@
 pipeline {
-    agent any // O tu agente Windows
+    agent any // Tu agente Windows
 
     environment {
         AWS_REGION         = 'us-east-2'
         ECR_PUBLIC_REGION  = 'us-east-1' 
-        ECR_PUBLIC_ALIAS   = 'e5f4p9e5'          // ¡CAMBIA ESTO POR TU ALIAS REAL!
-        BACKEND_DIR        = "AlfaByte_Xclone-"
-        FRONTEND_DIR       = "Frontend"
-        BACKEND_REPO_NAME  = 'alfabyte-xclone-backend'
-        FRONTEND_REPO_NAME = 'alfabyte-xclone-frontend'
-        EC2_IP             = '3.15.177.89'       // ¡LA IP PÚBLICA DE TU EC2!
-        // --- IDs de Credenciales Jenkins ---
-        AWS_CREDS_ID       = 'aws-manageJenkins' // Ya confirmaste que este es tu ID
-        SSH_KEY_ID         = 'xclone-key-ssh' 
-        JWT_SECRET_ID      = 'jwt-secret-id' 
-        MONGO_PW_ID        = 'mongo-pw-id' 
+        AWS_CREDS_ID       = 'aws-manageJenkins' // Tu ID de credencial AWS
     }
 
     stages {
-        stage('Clonar Repositorio') {
+        stage('Clonar Repositorio Basico') { // Solo para tener un checkout
             steps {
-                echo "==> Clonando repositorio..."
+                echo "==> Clonando repositorio (paso mínimo)..."
                 checkout scm
             }
         }
 
-        stage('Login ECR Público') {
+        stage('Test AWS CLI Execution') {
             steps {
-                echo "==> Haciendo login en ECR Público..."
+                echo "==> Intentando ejecutar AWS CLI directamente..."
+                script {
+                    // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO EN WINDOWS!
+                    def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe'
+                    def testAwsCommand = "\"${awsCliFullPath}\" --version"
+
+                    try {
+                        echo "Ejecutando comando: ${testAwsCommand}"
+                        def cliOutput = bat(script: testAwsCommand, returnStdout: true).trim()
+                        
+                        if (cliOutput && !cliOutput.isEmpty()) {
+                            echo "AWS CLI ejecutado con éxito. Salida:"
+                            echo cliOutput
+                        } else {
+                            def awsCmdExitCode = bat(script: testAwsCommand, returnStatus: true)
+                            error("Fallo al ejecutar AWS CLI o no hubo salida. Código de salida: ${awsCmdExitCode}")
+                        }
+
+                    } catch (e) {
+                        echo "EXCEPCIÓN al ejecutar AWS CLI: ${e.getMessage()}"
+                        if (e.getStackTrace()) {
+                            e.getStackTrace().each { line -> echo line.toString() }
+                        }
+                        throw e 
+                    }
+                }
+            }
+        }
+
+        stage('Test AWS CLI con withAWS') {
+            steps {
+                echo "==> Intentando ejecutar AWS CLI usando withAWS..."
                 withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
                     script {
-                        def tempPasswordFile = "ecrpass.tmp"
-                        // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO!
-                        def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe' 
-                        
-                        // Comando para obtener el token.
-                        def getEcrTokenFullCommand = "\"${awsCliFullPath}\" ecr-public get-login-password --region ${ECR_PUBLIC_REGION}"
-                        
-                        // Comando para el login de Docker
-                        def dockerLoginFullCommand = "docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}"
+                        // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO EN WINDOWS!
+                        def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe'
+                        def testAwsCommandWithCreds = "\"${awsCliFullPath}\" sts get-caller-identity"
 
                         try {
-                            echo "Paso 1: Ejecutando comando para obtener token de ECR: ${getEcrTokenFullCommand}"
-                            def passwordOutput = bat(script: getEcrTokenFullCommand, returnStdout: true).trim()
+                            echo "Ejecutando comando con withAWS: ${testAwsCommandWithCreds}"
+                            def cliOutputWithCreds = bat(script: testAwsCommandWithCreds, returnStdout: true).trim()
 
-                            if (passwordOutput && !passwordOutput.isEmpty()) {
-                                echo "Token ECR obtenido (longitud: ${passwordOutput.length()})."
+                            if (cliOutputWithCreds && !cliOutputWithCreds.isEmpty()) {
+                                echo "AWS CLI con withAWS ejecutado con éxito. Salida:"
+                                echo cliOutputWithCreds
                             } else {
-                                // Si passwordOutput está vacío, puede que el comando aws haya fallado silenciosamente
-                                // o no haya producido salida. Intentamos obtener el código de salida.
-                                echo "Salida de token vacía. Verificando código de salida del comando AWS..."
-                                def awsCmdExitCode = bat(script: getEcrTokenFullCommand, returnStatus: true)
-                                error("No se obtuvo token de AWS ECR o la salida está vacía. Código de salida del comando AWS: ${awsCmdExitCode}")
+                                def awsCmdExitCodeWithCreds = bat(script: testAwsCommandWithCreds, returnStatus: true)
+                                error("Fallo al ejecutar AWS CLI con withAWS o no hubo salida. Código de salida: ${awsCmdExitCodeWithCreds}")
                             }
 
-                            echo "Paso 2: Intentando hacer login en Docker..."
-                            writeFile file: tempPasswordFile, text: passwordOutput
-                            
-                            bat(script: "type ${tempPasswordFile} | ${dockerLoginFullCommand}")
-                            
-                            echo "Login de Docker completado."
-
                         } catch (e) {
-                            echo "Error durante el login a ECR: ${e.getMessage()}"
+                            echo "EXCEPCIÓN al ejecutar AWS CLI con withAWS: ${e.getMessage()}"
                             if (e.getStackTrace()) {
                                 e.getStackTrace().each { line -> echo line.toString() }
                             }
                             throw e 
-                        } finally {
-                            echo "Paso 3: Limpiando archivo temporal..."
-                            bat(script: "del ${tempPasswordFile}", failOnError: false) 
                         }
                     }
                 }
             }
         }
-
-        stage('Build & Push Backend') {
-            steps {
-                echo "==> Construyendo y subiendo imagen de backend..."
-                script {
-                    env.BACKEND_IMAGE_URL = "public.ecr.aws/${ECR_PUBLIC_ALIAS}/${BACKEND_REPO_NAME}:${env.BUILD_NUMBER}"
-                    dir(BACKEND_DIR) {
-                        bat "docker build -t ${env.BACKEND_IMAGE_URL} ."
-                        bat "docker push ${env.BACKEND_IMAGE_URL}"
-                    }
-                }
-            }
-        }
-
-        stage('Build & Push Frontend') {
-            steps {
-                echo "==> Construyendo y subiendo imagen de frontend..."
-                 script {
-                    env.FRONTEND_IMAGE_URL = "public.ecr.aws/${ECR_PUBLIC_ALIAS}/${FRONTEND_REPO_NAME}:${env.BUILD_NUMBER}"
-                    dir(FRONTEND_DIR) {
-                        bat "docker build -t ${env.FRONTEND_IMAGE_URL} ."
-                        bat "docker push ${env.FRONTEND_IMAGE_URL}"
-                    }
-                }
-            }
-        }
-
-        stage('Desplegar en AWS EC2') {
-            steps {
-                echo "==> Desplegando en EC2..."
-                withCredentials([
-                    sshUserPrivateKey(credentialsId: SSH_KEY_ID, keyFileVariable: 'SSH_KEY_FILE'),
-                    string(credentialsId: JWT_SECRET_ID, variable: 'JWT_SECRET_VALUE'),
-                    string(credentialsId: MONGO_PW_ID, variable: 'MONGO_PASSWORD_VALUE')
-                ]) {
-                    bat """
-                        ssh -o StrictHostKeyChecking=no -i %SSH_KEY_FILE% ec2-user@${EC2_IP} ^
-                        "echo '==> Conectado a EC2. Preparando despliegue...'; ^
-                        export BACKEND_IMAGE_URL='${env.BACKEND_IMAGE_URL}'; ^
-                        export FRONTEND_IMAGE_URL='${env.FRONTEND_IMAGE_URL}'; ^
-                        export APP_PORT='3000'; ^
-                        export MONGO_ATLAS='mongodb+srv://anthonyarango01:${MONGO_PASSWORD_VALUE}@databasesx.silq0.mongodb.net/'; ^
-                        export DB_NAME='databasesx'; ^
-                        export MONGO_ATLAS_DB_USER='anthonyarango01'; ^
-                        export MONGO_ATLAS_DB_PASSWORD='${MONGO_PASSWORD_VALUE}'; ^
-                        export JWT_SECRET='${JWT_SECRET_VALUE}'; ^
-                        
-                        echo '==> Haciendo login en ECR Público...'; ^
-                        # Usamos la ruta completa de AWS CLI en EC2 también por si acaso (aunque el user_data ya debería instalarlo globalmente)
-                        # Si está en el PATH en EC2, solo 'aws' es suficiente.
-                        /usr/local/bin/aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION} | docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}; ^
-
-                        echo '==> Descargando imágenes...'; ^
-                        docker pull \$BACKEND_IMAGE_URL; ^
-                        docker pull \$FRONTEND_IMAGE_URL; ^
-                        
-                        echo '==> Ejecutando docker-compose...'; ^
-                        mkdir -p /home/ec2-user/app; ^
-                        cd /home/ec2-user/app; ^
-                        # ¡CAMBIA ESTO POR LA URL DE TU REPOSITORIO REAL!
-                        git pull https://github.com/Anthonylog13/Manager_Jenkins.git; ^ 
-                        
-                        docker-compose -f docker-compose.prod.yml up -d --remove-orphans; ^
-
-                        echo '==> Limpiando imágenes antiguas (opcional)...'; ^
-                        docker image prune -f; ^
-
-                        echo '==> ¡Despliegue completado! ✅';"
-                    """
-                }
-            }
-        }
     }
-
     post {
-        success {
-            echo "Pipeline ejecutado con éxito."
-        }
-        failure {
-            echo "Falló el pipeline."
+        always {
+            echo "Pipeline de diagnóstico finalizado."
         }
     }
 }
