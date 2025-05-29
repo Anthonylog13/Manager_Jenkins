@@ -17,7 +17,7 @@ pipeline {
 
         stage('Test AWS CLI Execution') {
             steps {
-                echo "==> Variables de Entorno en Jenkins =="
+                echo "==> Variables de Entorno en Jenkdddins =="
                 bat "set"
                 echo "==> Intentando ejecutar AWS CLI directamente..."
                 
