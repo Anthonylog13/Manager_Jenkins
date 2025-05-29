@@ -2,15 +2,16 @@ pipeline {
     agent any // Tu agente Windows
 
     environment {
+        // No necesitamos credenciales AWS para esta prueba específica
+        // Pero mantenemos las otras por si quieres volver al pipeline completo luego
         AWS_REGION         = 'us-east-2'
         ECR_PUBLIC_REGION  = 'us-east-1' 
-        ECR_PUBLIC_ALIAS   = 'e5f4p9e5'          // ¡CAMBIA ESTO POR TU ALIAS REAL!
+        ECR_PUBLIC_ALIAS   = 'e5f4p9e5'
         BACKEND_DIR        = "AlfaByte_Xclone-"
         FRONTEND_DIR       = "Frontend"
         BACKEND_REPO_NAME  = 'alfabyte-xclone-backend'
         FRONTEND_REPO_NAME = 'alfabyte-xclone-frontend'
-        EC2_IP             = '3.15.177.89'       // ¡LA IP PÚBLICA DE TU EC2!
-        // --- IDs de Credenciales Jenkins ---
+        EC2_IP             = '3.15.177.89'
         AWS_CREDS_ID       = 'aws-manageJenkins' 
         SSH_KEY_ID         = 'xclone-key-ssh' 
         JWT_SECRET_ID      = 'jwt-secret-id' 
@@ -18,142 +19,64 @@ pipeline {
     }
 
     stages {
-        stage('Clonar Repositorio') {
+        stage('Clonar Repositorio') { // Mantenemos un checkout
             steps {
                 echo "==> Clonando repositorio..."
                 checkout scm
             }
         }
 
-        stage('Login ECR Público') {
+        stage('Test Docker Login a Docker Hub') {
             steps {
-                echo "==> Haciendo login en ECR Público usando PowerShell..."
-                withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
-                    script {
-                        // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO EN WINDOWS!
-                        def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe' 
-                        
-                        def psLoginScript = """
-                            Write-Output "Paso 1: Obteniendo token de ECR..."
-                            # Ejecuta el comando y captura la salida cruda
-                            \$rawTokenOutput = & \"${awsCliFullPath}\" ecr-public get-login-password --region \"${ECR_PUBLIC_REGION}\"
-                            
-                            # Limpia el token: quita espacios/saltos de línea al principio/final
-                            \$ecrPassword = \$rawTokenOutput.Trim()
-
-                            if (!\$ecrPassword -or \$ecrPassword.Length -lt 100) { // Un token válido es mucho más largo que 100
-                                Write-Error "No se obtuvo un token válido de AWS ECR. Salida: '\$rawTokenOutput'"
-                                exit 1 
-                            }
-                            Write-Output "Token ECR obtenido (longitud: \$(\$ecrPassword.Length))."
-                            
-                            Write-Output "Paso 2: Intentando hacer login en Docker..."
-                            # Intentamos pasar el token directamente a través de la tubería
-                            # y nos aseguramos de que no haya otra salida antes.
-                            # El token se envía al stdin de docker login.
-                            \$ecrPassword | docker login --username AWS --password-stdin "public.ecr.aws/${ECR_PUBLIC_ALIAS}"
-                            
-                            if (\$LASTEXITCODE -ne 0) {
-                                Write-Error "Docker login falló con código de salida: \$LASTEXITCODE"
-                                exit 1
-                            }
-                            Write-Output "Login de Docker aparentemente completado."
-                        """
-                        
-                        try {
-                            powershell(script: psLoginScript)
-                            echo "Stage de Login ECR Público completado con éxito." 
-                        } catch (e) {
-                            echo "EXCEPCIÓN al ejecutar PowerShell para login ECR: ${e.getMessage()}"
-                            throw e
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Build & Push Backend') {
-            steps {
-                echo "==> Construyendo y subiendo imagen de backend..."
+                echo "==> Intentando login a Docker Hub usando PowerShell..."
                 script {
-                    env.BACKEND_IMAGE_URL = "public.ecr.aws/${ECR_PUBLIC_ALIAS}/${BACKEND_REPO_NAME}:${env.BUILD_NUMBER}"
-                    dir(BACKEND_DIR) {
-                        // Cambiamos a powershell si bat sigue dando problemas
-                        powershell "docker build -t '${env.BACKEND_IMAGE_URL}' ."
-                        powershell "docker push '${env.BACKEND_IMAGE_URL}'"
-                    }
-                }
-            }
-        }
-
-        stage('Build & Push Frontend') {
-            steps {
-                echo "==> Construyendo y subiendo imagen de frontend..."
-                 script {
-                    env.FRONTEND_IMAGE_URL = "public.ecr.aws/${ECR_PUBLIC_ALIAS}/${FRONTEND_REPO_NAME}:${env.BUILD_NUMBER}"
-                    dir(FRONTEND_DIR) {
-                        // Cambiamos a powershell si bat sigue dando problemas
-                        powershell "docker build -t '${env.FRONTEND_IMAGE_URL}' ."
-                        powershell "docker push '${env.FRONTEND_IMAGE_URL}'"
-                    }
-                }
-            }
-        }
-
-        stage('Desplegar en AWS EC2') {
-            steps {
-                echo "==> Desplegando en EC2..."
-                withCredentials([
-                    sshUserPrivateKey(credentialsId: SSH_KEY_ID, keyFileVariable: 'SSH_KEY_FILE'),
-                    string(credentialsId: JWT_SECRET_ID, variable: 'JWT_SECRET_VALUE'),
-                    string(credentialsId: MONGO_PW_ID, variable: 'MONGO_PASSWORD_VALUE')
-                ]) {
-                    // El comando SSH multilínea con 'bat' es propenso a errores en Windows.
-                    // Si este stage falla, sería mejor convertirlo a un script PowerShell
-                    // o usar el plugin "SSH Agent" o "Publish over SSH".
-                    bat """
-                        ssh -o StrictHostKeyChecking=no -i %SSH_KEY_FILE% ec2-user@${EC2_IP} ^
-                        "echo '==> Conectado a EC2. Preparando despliegue...'; ^
-                        export BACKEND_IMAGE_URL='${env.BACKEND_IMAGE_URL}'; ^
-                        export FRONTEND_IMAGE_URL='${env.FRONTEND_IMAGE_URL}'; ^
-                        export APP_PORT='3000'; ^
-                        export MONGO_ATLAS='mongodb+srv://anthonyarango01:${MONGO_PASSWORD_VALUE}@databasesx.silq0.mongodb.net/'; ^
-                        export DB_NAME='databasesx'; ^
-                        export MONGO_ATLAS_DB_USER='anthonyarango01'; ^
-                        export MONGO_ATLAS_DB_PASSWORD='${MONGO_PASSWORD_VALUE}'; ^
-                        export JWT_SECRET='${JWT_SECRET_VALUE}'; ^
+                    // Credenciales de prueba para Docker Hub
+                    // ¡CAMBIA ESTO POR UN USUARIO Y CONTRASEÑA DE PRUEBA O INVENTADOS!
+                    def dockerHubUser = "usuariodeprueba12345"
+                    def dockerHubPassword = "passworddeprueba12345" 
+                    
+                    def psLoginScript = """
+                        Write-Output "Paso 1: Preparando para login a Docker Hub..."
+                        Write-Output "Usuario: ${dockerHubUser}"
+                        # No imprimas la contraseña real en logs, esto es solo un ejemplo
+                        # Write-Output "Contraseña (simulada): ${dockerHubPassword}" 
                         
-                        echo '==> Haciendo login en ECR Público...'; ^
-                        aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION} | docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}; ^
-
-                        echo '==> Descargando imágenes...'; ^
-                        docker pull \$BACKEND_IMAGE_URL; ^
-                        docker pull \$FRONTEND_IMAGE_URL; ^
+                        Write-Output "Paso 2: Intentando hacer login en Docker Hub..."
+                        # Pasamos la contraseña a través de la tubería
+                        "${dockerHubPassword}" | docker login --username "${dockerHubUser}" --password-stdin
                         
-                        echo '==> Ejecutando docker-compose...'; ^
-                        mkdir -p /home/ec2-user/app; ^
-                        cd /home/ec2-user/app; ^
-                        # ¡CAMBIA ESTO POR LA URL DE TU REPOSITORIO REAL!
-                        git pull https://github.com/Anthonylog13/Manager_Jenkins.git; ^ 
-                        
-                        docker-compose -f docker-compose.prod.yml up -d --remove-orphans; ^
-
-                        echo '==> Limpiando imágenes antiguas (opcional)...'; ^
-                        docker image prune -f; ^
-
-                        echo '==> ¡Despliegue completado! ✅';"
+                        if (\$LASTEXITCODE -ne 0) {
+                            Write-Error "Login a Docker Hub falló con código de salida: \$LASTEXITCODE"
+                            # Intentamos mostrar más información si es un error de Docker
+                            docker info
+                            exit 1
+                        }
+                        Write-Output "Login a Docker Hub aparentemente completado (o falló la autenticación si las credenciales son incorrectas, pero el comando se ejecutó)."
                     """
+                    
+                    try {
+                        powershell(script: psLoginScript)
+                        echo "Stage de Test Docker Login completado." 
+                    } catch (e) {
+                        echo "EXCEPCIÓN al ejecutar PowerShell para login a Docker Hub: ${e.getMessage()}"
+                        throw e
+                    }
                 }
             }
         }
+        // Comenta los otros stages por ahora para esta prueba
+        /* stage('Build & Push Backend') { ... }
+        stage('Build & Push Frontend') { ... }
+        stage('Desplegar en AWS EC2') { ... }
+        */
     }
 
     post {
         success {
-            echo "Pipeline ejecutado con éxito."
+            echo "Pipeline de Test Docker Login ejecutado con éxito."
         }
         failure {
-            echo "Falló el pipeline."
+            echo "Falló el pipeline de Test Docker Login."
         }
     }
 }
