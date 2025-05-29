@@ -32,6 +32,7 @@ pipeline {
                     script {
                         // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO EN WINDOWS!
                         def awsCliFullPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe' 
+                        def tempTokenFile = "ecr_token_utf8.tmp" // Archivo temporal para el token
                         
                         def psLoginScript = """
                             Write-Output "Paso 1: Obteniendo token de ECR..."
@@ -50,16 +51,22 @@ pipeline {
                             \$tokenEnd = \$ecrPassword.Substring([System.Math]::Max(0, \$ecrPassword.Length - 20))
                             Write-Output "Token ECR obtenido (longitud: \$(\$ecrPassword.Length)). Inicio: '\$tokenStart...' Fin: '...\$tokenEnd'"
                             
-                            Write-Output "Paso 2: Intentando hacer login en Docker ECR Público..."
-                            # Usamos el endpoint base de ECR Público sin el alias
-                            \$ecrPassword | docker login --username AWS --password-stdin "public.ecr.aws" 
+                            Write-Output "Paso 2: Escribiendo token a archivo temporal con codificación UTF-8 sin BOM..."
+                            # Escribimos el token al archivo explícitamente como UTF-8 sin BOM
+                            Set-Content -Path "${tempTokenFile}" -Value \$ecrPassword -Encoding UTF8NoBOM -NoNewline
+
+                            Write-Output "Paso 3: Intentando hacer login en Docker ECR Público usando el archivo..."
+                            # Leemos el contenido crudo del archivo y lo pasamos por la tubería
+                            Get-Content -Path "${tempTokenFile}" -Raw | docker login --username AWS --password-stdin "public.ecr.aws" 
                             
                             if (\$LASTEXITCODE -ne 0) {
                                 Write-Error "Docker login a ECR Público falló con código de salida: \$LASTEXITCODE"
                                 docker info # Intentamos obtener más info de Docker
+                                Remove-Item "${tempTokenFile}" -ErrorAction SilentlyContinue # Limpia incluso en error
                                 exit 1
                             }
                             Write-Output "Login a ECR Público aparentemente completado."
+                            Remove-Item "${tempTokenFile}" -ErrorAction SilentlyContinue # Limpia en éxito
                         """
                         
                         try {
@@ -67,6 +74,8 @@ pipeline {
                             echo "Stage de Login ECR Público completado con éxito." 
                         } catch (e) {
                             echo "EXCEPCIÓN al ejecutar PowerShell para login ECR: ${e.getMessage()}"
+                            // Si hay un archivo temporal sobrante, intentamos borrarlo
+                            powershell "Remove-Item '${tempTokenFile}' -ErrorAction SilentlyContinue"
                             throw e
                         }
                     }
