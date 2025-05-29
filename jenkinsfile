@@ -27,39 +27,39 @@ pipeline {
         stage('Login ECR Público') {
         steps {
             echo "==> Haciendo login en ECR Público..."
-            withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) { // ECR_PUBLIC_REGION debe ser 'us-east-1'
+            withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
                 script {
-                    def tempPasswordFile = "ecrpass.tmp" // Nombre del archivo temporal
-                    // Usamos la ruta completa al AWS CLI para máxima certeza
+                    def tempPasswordFile = "ecrpass.tmp"
                     // ¡AJUSTA ESTA RUTA SI TU AWS CLI ESTÁ EN OTRO LADO!
-                    def awsCliPath = "\"C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe\"" 
-                    def ecrLoginCmd = "${awsCliPath} ecr-public get-login-password --region ${ECR_PUBLIC_REGION}"
-                    def dockerLoginCmd = "docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}"
+                    def awsCliPath = 'C:\\Program Files\\Amazon\\AWSCLIV2\\aws.exe' 
+                    // Comando para obtener el token. Las comillas alrededor de awsCliPath son cruciales.
+                    def getEcrTokenCmd = "\"${awsCliPath}\" ecr-public get-login-password --region ${ECR_PUBLIC_REGION}"
+                    // Comando para el login de Docker
+                    def dockerLoginFullCmd = "docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}"
 
                     try {
-                        echo "Paso 1: Obteniendo token de ECR con el comando: ${ecrLoginCmd}"
-                        // Ejecutamos el comando AWS y guardamos la salida en un archivo
-                        bat(script: "${ecrLoginCmd} > ${tempPasswordFile}")
-                        
-                        if (fileExists(tempPasswordFile)) {
-                            def passwordContent = readFile(tempPasswordFile).trim() // .trim() para quitar espacios/saltos de línea
-                            if (passwordContent.isEmpty()) {
-                                error("El archivo de token ECR está vacío.")
-                            }
-                            echo "Token ECR obtenido (longitud: ${passwordContent.length()}) y guardado en ${tempPasswordFile}."
+                        echo "Paso 1: Ejecutando comando para obtener token de ECR: ${getEcrTokenCmd}"
+                        // Ejecutamos el comando AWS y guardamos la salida en una variable de Groovy
+                        def passwordOutput = bat(script: getEcrTokenCmd, returnStdout: true).trim()
+
+                        if (passwordOutput && !passwordOutput.isEmpty()) {
+                            echo "Token ECR obtenido (longitud: ${passwordOutput.length()})."
+                            // NO imprimas el token por seguridad, solo su longitud
                         } else {
-                            error("No se pudo crear el archivo de token ECR.")
+                            error("No se obtuvo token de AWS ECR o la salida está vacía.")
                         }
 
-                        echo "Paso 2: Ejecutando docker login..."
-                        // Usamos 'type' para leer el archivo y pipearlo a docker login
-                        bat(script: "type ${tempPasswordFile} | ${dockerLoginCmd}")
+                        echo "Paso 2: Intentando hacer login en Docker..."
+                        // Escribimos el token a un archivo temporal
+                        writeFile file: tempPasswordFile, text: passwordOutput
+                        
+                        // Usamos 'type' para pasar el contenido del archivo como stdin a docker login
+                        bat(script: "type ${tempPasswordFile} | ${dockerLoginFullCmd}")
                         
                         echo "Login de Docker completado."
 
                     } catch (e) {
                         echo "Error durante el login a ECR: ${e.getMessage()}"
-                        // Imprime más detalles del error si están disponibles
                         if (e.getStackTrace()) {
                             e.getStackTrace().each { line -> echo line.toString() }
                         }
