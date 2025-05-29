@@ -25,49 +25,13 @@ pipeline {
         }
 
         stage('Login ECR Público') {
-    steps {
-        echo "==> Haciendo login en ECR Público..."
-        withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
-            script {
-                def tempPasswordFile = "ecrpass.tmp" // Nombre del archivo temporal
-                def ecrLoginCmd = "aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION}"
-                def dockerLoginCmd = "docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}"
-
-                try {
-                    echo "Paso 1: Obteniendo token de ECR..."
-                    // Ejecutamos el comando AWS y guardamos la salida en un archivo
-                    // Usamos > para redirigir stdout al archivo.
-                    bat(script: "${ecrLoginCmd} > ${tempPasswordFile}")
-
-                    // Verificamos si el archivo se creó y no está vacío (opcional, pero bueno para depurar)
-                    if (fileExists(tempPasswordFile)) {
-                        def passwordContent = readFile(tempPasswordFile)
-                        if (passwordContent.trim().isEmpty()) {
-                            error("El archivo de token ECR está vacío.")
-                        }
-                        echo "Token ECR obtenido y guardado en ${tempPasswordFile}."
-                    } else {
-                        error("No se pudo crear el archivo de token ECR.")
-                    }
-
-                    echo "Paso 2: Ejecutando docker login..."
-                    // Usamos 'type' para leer el archivo y pipearlo a docker login
-                    bat(script: "type ${tempPasswordFile} | ${dockerLoginCmd}")
-
-                    echo "Login de Docker completado."
-
-                } catch (e) {
-                    echo "Error durante el login a ECR: ${e.getMessage()}"
-                    throw e // Relanzamos el error para que el pipeline falle
-                } finally {
-                    // Limpiamos el archivo temporal, incluso si hay errores
-                    echo "Paso 3: Limpiando archivo temporal..."
-                    bat(script: "del ${tempPasswordFile}", failOnError: false) // failOnError: false para que no falle si el archivo no existe
+            steps {
+                echo "==> Haciendo login en ECR Público..."
+                withAWS(credentials: AWS_CREDS_ID, region: ECR_PUBLIC_REGION) {
+                    bat "aws ecr-public get-login-password --region ${ECR_PUBLIC_REGION} | docker login --username AWS --password-stdin public.ecr.aws/${ECR_PUBLIC_ALIAS}"
                 }
             }
         }
-    }
-}
 
         stage('Build & Push Backend') {
             steps {
